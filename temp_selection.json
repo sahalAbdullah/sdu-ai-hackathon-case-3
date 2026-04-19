@@ -1,8 +1,11 @@
 {
+  "order_id": "ORD-004",
   "customer": {
-    "name": "Danfoss",
-    "segment": "Food & Beverage",
-    "region": "EMEA-East"
+    "name": "T. Novak",
+    "segment": "District Heating",
+    "region": "EMEA-East",
+    "probability": 50,
+    "revenue_tier": "Medium"
   },
   "order": {
     "requested_delivery_date": "2026-07-18",
@@ -15,13 +18,7 @@
       "material_number": "MAT-101414",
       "description": "MX250/PL.15 304TL 0.6mm",
       "type": "Plate",
-      "quantity_pcs": 5000
+      "quantity_pcs": 500
     }
-  ],
-  "summary": {
-    "total_materials": 1,
-    "total_pcs": 5000,
-    "plates_count": 1,
-    "gaskets_count": 0
-  }
+  ]
 }

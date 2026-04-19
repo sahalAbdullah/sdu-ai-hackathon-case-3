@@ -1,6 +1,6 @@
 """
-Order Feasibility — same selection UI as Customer Request,
-but on Submit runs run.py and renders results beautifully.
+Order Feasibility — selection UI feeds into the full pipeline.
+Ranks all orders (3 hardcoded + new) and runs feasibility in priority order.
 """
 
 import json, sys
@@ -9,18 +9,19 @@ from datetime import date, timedelta, datetime
 
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 import streamlit as st
 
 ROOT = Path(__file__).parent.parent.parent
 DATA = ROOT / "data" / "extracted"
-RUN  = Path(__file__).parent / "run.py"
 
 st.set_page_config(page_title="Order Feasibility", layout="wide")
 
-# ── import run.py functions directly ──────────────────────────────────────
+# ── import pipeline ────────────────────────────────────────────────────────
 sys.path.insert(0, str(Path(__file__).parent))
-from run_data_pipeline import check_material, _csv_for_type, _parse_factory_code, FACTORY_NAMES
+from pipeline import (
+    run_pipeline, HARDCODED_ORDERS, load_new_order,
+    _parse_factory_code, FACTORY_NAMES, TODAY,
+)
 
 # ── load reference data ────────────────────────────────────────────────────
 @st.cache_data
@@ -175,10 +176,12 @@ with col_a:
 with col_b:
     delivery_date   = st.date_input("Requested delivery date",
                                     value=date.today() + timedelta(days=90), min_value=date.today())
+    priority        = st.selectbox("Order priority", ["Standard", "Urgent", "Critical"])
     preferred_plant = st.selectbox("Preferred factory (optional)", options=["No preference"] + plants)
 with col_c:
-    priority = st.selectbox("Order priority", ["Standard", "Urgent", "Critical"])
-    notes    = st.text_area("Additional notes", placeholder="Any special requirements...")
+    probability  = st.selectbox("Chances of Order (%)", options=[10, 25, 50, 75, 90], index=2)
+    revenue_tier = st.selectbox("Revenue Tier", options=["Strategic", "Large", "Medium", "Small"], index=2)
+    notes        = st.text_area("Additional notes", placeholder="Any special requirements...")
 st.divider()
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -198,15 +201,21 @@ with btn_col2:
     st.button("Clear All Fields", on_click=clear_all, type="secondary")
 
 # ══════════════════════════════════════════════════════════════════════════
-# RUN FEASIBILITY
+# RUN PIPELINE
 # ══════════════════════════════════════════════════════════════════════════
 if submit_btn and has_selection:
 
-    request = {
+    # ── order ID is always slot 4 (3 hardcoded + this new one) ──────────
+    order_id = f"ORD-{len(HARDCODED_ORDERS) + 1:03d}"
+
+    new_order = {
+        "order_id": order_id,
         "customer": {
-            "name":    customer_name or "Unknown",
-            "segment": customer_segment if customer_segment != "— select —" else "Not specified",
-            "region":  customer_region  if customer_region  != "— select —" else "Not specified",
+            "name":         customer_name or "Unknown",
+            "segment":      customer_segment if customer_segment != "— select —" else "Not specified",
+            "region":       customer_region  if customer_region  != "— select —" else "Not specified",
+            "probability":  probability,
+            "revenue_tier": revenue_tier,
         },
         "order": {
             "requested_delivery_date": str(delivery_date),
@@ -215,18 +224,11 @@ if submit_btn and has_selection:
             "notes":                   notes or "None",
         },
         "materials_requested": all_materials,
-        "summary": {
-            "total_materials": len(all_materials),
-            "total_pcs":       sum(m["quantity_pcs"] for m in all_materials),
-            "plates_count":    len(plate_selection),
-            "gaskets_count":   len(gasket_selection),
-        }
     }
 
-    # save JSON
     json_path = ROOT / "temp_selection.json"
     with open(json_path, "w") as f:
-        json.dump(request, f, indent=2)
+        json.dump(new_order, f, indent=2)
 
     # ── full-screen loader ────────────────────────────────────────────────
     loader = st.empty()
@@ -234,205 +236,348 @@ if submit_btn and has_selection:
         st.markdown("""
         <div style="display:flex;flex-direction:column;align-items:center;
                     justify-content:center;height:60vh;gap:24px;">
-            <h2 style="color:#1f77b4;margin:0">Checking Feasibility</h2>
+            <h2 style="color:#1f77b4;margin:0">🔄 Running Pipeline</h2>
             <p style="color:#666;font-size:1.1rem;margin:0">
-                Scanning inventory · capacity · lead times across all 15 factories...
+                Ranking orders · allocating inventory · checking feasibility across all 15 factories...
             </p>
         </div>
         """, unsafe_allow_html=True)
-        spinner_ph = st.spinner("Running analysis...")
 
-    # ── run the algorithm ────────────────────────────────────────────────
-    preferred    = _parse_factory_code(preferred_plant.split("–")[0] if "–" in preferred_plant else preferred_plant)
-    req_date     = datetime.strptime(str(delivery_date), "%Y-%m-%d").date()
-    results      = []
+    with st.spinner("Pipeline running..."):
+        all_orders = list(HARDCODED_ORDERS) + [new_order]
+        ranked = run_pipeline(all_orders)
 
-    with spinner_ph:
-        for item in all_materials:
-            mat_id   = item["material_number"]
-            qty      = int(item["quantity_pcs"])
-            m_type   = item.get("type", "Plate")
-            csv_path = _csv_for_type(m_type)
-            if not csv_path.exists():
-                results.append({"material": mat_id, "error": f"Dataset not found: {csv_path.name}"})
-                continue
-            df = pd.read_csv(csv_path)
-            results.append(check_material(df, mat_id, qty, preferred, req_date))
+    loader.empty()
 
-    loader.empty()  # remove full-screen loader
+    today = date.today()
 
     # ══════════════════════════════════════════════════════════════════════
-    # RENDER RESULTS
+    # SECTION 1 — PIPELINE RANKING TABLE
     # ══════════════════════════════════════════════════════════════════════
-    today      = date.today()
-    days_left  = (req_date - today).days
-
-    # ── header banner ────────────────────────────────────────────────────
-    overall_ok  = all(r.get("sol_a", {}) and r["sol_a"]["status"] == "FULL" for r in results if not r.get("error"))
-    overall_any = any(r.get("sol_a", {}) and r["sol_a"]["status"] != "NONE" for r in results if not r.get("error"))
-    if overall_ok:
-        banner_color, banner_icon, banner_text = "#28a745", "✅", "FULLY FEASIBLE ON TIME"
-    elif overall_any:
-        banner_color, banner_icon, banner_text = "#fd7e14", "⚠️", "PARTIALLY FEASIBLE"
-    else:
-        banner_color, banner_icon, banner_text = "#dc3545", "❌", "NOT FEASIBLE BY DEADLINE"
-
-    st.markdown(f"""
-    <div style="background:{banner_color};color:white;padding:20px 32px;
-                border-radius:12px;margin-bottom:24px;">
-        <h2 style="margin:0;font-size:1.8rem">{banner_icon} {banner_text}</h2>
-        <p style="margin:4px 0 0;opacity:0.9;font-size:1rem">
-            Customer: <b>{request['customer']['name']}</b> &nbsp;|&nbsp;
-            Deadline: <b>{delivery_date}</b> ({days_left} days from today) &nbsp;|&nbsp;
-            Priority: <b>{priority}</b>
-        </p>
-    </div>
+    st.markdown("""
+    <h2 style="margin-bottom:4px">📊 Pipeline Priority Ranking</h2>
+    <p style="color:#666;margin-top:0">Orders ranked by composite score — Rank 1 gets inventory first</p>
     """, unsafe_allow_html=True)
 
-    # ── top KPI row ──────────────────────────────────────────────────────
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Materials",    len(all_materials))
-    k2.metric("Total PCS",    f"{sum(m['quantity_pcs'] for m in all_materials):,}")
-    k3.metric("Days to Deadline", days_left)
-    k4.metric("Preferred Factory", preferred if preferred != "No" else "Any")
+    tier_colors = {"Strategic": "#7b2ff7", "Large": "#1f77b4", "Medium": "#fd7e14", "Small": "#6c757d"}
+    ranking_rows = []
+    for r in ranked:
+        oid      = r.get("order_id", "?")
+        is_new   = oid == order_id
+        tag      = " 🆕" if is_new else ""
+        n_mats   = len(r.get("materials_requested", []))
+        total_pcs = sum(int(m.get("quantity_pcs", 0)) for m in r.get("materials_requested", []))
+        ranking_rows.append({
+            "Rank":         f"#{r['rank']}",
+            "Order ID":     oid + tag,
+            "Customer":     r.get("customer", {}).get("name", "?"),
+            "Segment":      r.get("customer", {}).get("segment", "?"),
+            "Probability":  f"{r['probability']}%",
+            "Revenue Tier": r.get("revenue_tier", "?"),
+            "Loyalty":      f"{r['hist_orders']} projects",
+            "Score":        f"{r['composite_score']:.4f}",
+            "Materials":    n_mats,
+            "Total PCS":    f"{total_pcs:,}",
+            "Deadline":     r["order"].get("requested_delivery_date", "?"),
+            "Priority":     r["order"].get("priority", "?"),
+        })
+
+    _cols = ["Rank","Order ID","Customer","Segment","Probability",
+             "Revenue Tier","Loyalty","Score","Materials","Total PCS","Deadline","Priority"]
+    _hdr = "".join(f'<th style="padding:8px 12px;text-align:left;border-bottom:2px solid #dee2e6;white-space:nowrap">{c}</th>' for c in _cols)
+    _rows_html = ""
+    for _row in ranking_rows:
+        _is_new = order_id in _row["Order ID"]
+        _bg  = "background:#fff3cd;border-left:4px solid #ffc107;" if _is_new else ""
+        _fw  = "font-weight:600;" if _is_new else ""
+        _cells = "".join(f'<td style="padding:8px 12px;{_fw}white-space:nowrap">{_row[c]}</td>' for c in _cols)
+        _rows_html += f'<tr style="{_bg}">{_cells}</tr>'
+    st.markdown(f"""
+    <div style="overflow-x:auto;border:1px solid #dee2e6;border-radius:8px">
+    <table style="width:100%;border-collapse:collapse;font-size:0.88rem">
+      <thead><tr style="background:#f8f9fa">{_hdr}</tr></thead>
+      <tbody>{_rows_html}</tbody>
+    </table>
+    </div>
+    <p style="font-size:0.78rem;color:#888;margin:4px 0 0">
+      🟡 Highlighted row = your order
+    </p>
+    """, unsafe_allow_html=True)
+
+    # ══════════════════════════════════════════════════════════════════════
+    # SECTION 1b — PIPELINE CHARTS
+    # ══════════════════════════════════════════════════════════════════════
+    _TIER = {"Strategic": 1.0, "Large": 0.75, "Medium": 0.5, "Small": 0.25}
+
+    # build per-order chart data
+    _cdata = []
+    for r in ranked:
+        oid   = r.get("order_id", "?")
+        label = f"#{r['rank']} {oid}"
+        res_list = [x for x in r.get("results", []) if not x.get("error")]
+
+        # score components
+        prob_c = (r["probability"] / 100) * 0.50
+        tier_c = _TIER.get(r["revenue_tier"], 0.5) * 0.30
+        loy_c  = min(r["hist_orders"] / 20, 1.0) * 0.20
+
+        # PCS coverage
+        total_qty   = sum(x["qty"] for x in res_list)
+        from_stock  = sum(x["sol_a"]["covered"] for x in res_list if x.get("sol_a"))
+        from_prod   = sum(
+            x["sol_b"]["best"]["from_prod"] for x in res_list
+            if x.get("sol_b") and x["sol_b"].get("best")
+        )
+        uncovered   = max(0, total_qty - from_stock - from_prod)
+
+        # worst-case delivery (latest across materials)
+        deliveries = []
+        for x in res_list:
+            if x.get("sol_a") and x["sol_a"]["status"] == "FULL" and x["sol_a"]["last_date"]:
+                deliveries.append(x["sol_a"]["last_date"])
+            elif x.get("sol_b") and x["sol_b"].get("best"):
+                deliveries.append(x["sol_b"]["best"]["delivery"])
+        worst_del = max(deliveries) if deliveries else None
+        deadline  = r["req_date"]
+        days_to_del  = (worst_del  - today).days if worst_del else 0
+        days_to_dead = (deadline   - today).days
+
+        # total fulfillment cost per order
+        order_cost = 0
+        for x in res_list:
+            if x.get("sol_a") and x["sol_a"]["status"] == "FULL":
+                order_cost += x["sol_a"]["total_cost"]
+            elif x.get("sol_b") and x["sol_b"].get("best"):
+                order_cost += x["sol_b"]["best"]["total_cost"]
+            elif x.get("sol_a") and x["sol_a"]["total_cost"]:
+                order_cost += x["sol_a"]["total_cost"]
+
+        _cdata.append({
+            "label": label, "order_id": oid,
+            "prob_c": prob_c, "tier_c": tier_c, "loy_c": loy_c,
+            "from_stock": from_stock, "from_prod": from_prod, "uncovered": uncovered,
+            "days_to_del": days_to_del, "days_to_dead": days_to_dead,
+            "on_time": worst_del <= deadline if worst_del else False,
+            "customer": r.get("customer", {}).get("name", "?"),
+            "order_cost": order_cost,
+            "is_new": oid == order_id,
+        })
+
+    labels = [d["label"] for d in _cdata]
+    bar_colors = ["#ffc107" if d["is_new"] else "#1f77b4" for d in _cdata]
+
+    ch_inv, ch_cost = st.columns(2)
+
+    # ── Chart 1: Inventory Allocation (stacked bar) ───────────────────────
+    with ch_inv:
+        st.markdown("**📦 Inventory Allocation — Who Gets What?**")
+        fig_inv = px.bar(
+            pd.DataFrame({
+                "Order":  labels * 3,
+                "Source": (["From Stock ✅"]      * len(_cdata) +
+                           ["From Production 🔧"] * len(_cdata) +
+                           ["Uncovered ❌"]        * len(_cdata)),
+                "PCS":    ([d["from_stock"] for d in _cdata] +
+                           [d["from_prod"]  for d in _cdata] +
+                           [d["uncovered"]  for d in _cdata]),
+            }),
+            x="Order", y="PCS", color="Source", barmode="stack",
+            color_discrete_map={
+                "From Stock ✅":      "#28a745",
+                "From Production 🔧": "#fd7e14",
+                "Uncovered ❌":        "#dc3545",
+            },
+            height=320,
+        )
+        fig_inv.update_layout(
+            margin=dict(t=10, b=10, l=10, r=10),
+            legend=dict(orientation="h", y=-0.25, font=dict(size=11)),
+            yaxis_title="PCS", xaxis_title="",
+            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        )
+        st.plotly_chart(fig_inv, use_container_width=True)
+
+    # ── Chart 2: Fulfillment Cost per Order (bar) ─────────────────────────
+    with ch_cost:
+        st.markdown("**💶 Fulfillment Cost per Order (EUR)**")
+        fig_cost = px.bar(
+            pd.DataFrame({
+                "Order":    labels,
+                "Cost EUR": [d["order_cost"] for d in _cdata],
+                "Customer": [d["customer"]   for d in _cdata],
+            }),
+            x="Order", y="Cost EUR",
+            text=[f"€{d['order_cost']:,.0f}" for d in _cdata],
+            hover_data=["Customer"],
+            height=320,
+            color_discrete_sequence=["#1f77b4"],
+        )
+        fig_cost.update_traces(
+            textposition="outside",
+            textfont_size=11,
+            marker_color=bar_colors,
+        )
+        fig_cost.update_layout(
+            margin=dict(t=10, b=10, l=10, r=10),
+            yaxis_title="EUR", xaxis_title="",
+            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+            showlegend=False,
+        )
+        st.plotly_chart(fig_cost, use_container_width=True)
+
+    st.caption("🟡 Yellow bar = your new order")
     st.divider()
 
-    # ── per-material results ─────────────────────────────────────────────
-    for res in results:
-        if res.get("error"):
-            st.error(f"**{res['material']}** — {res['error']}")
-            continue
+    # ══════════════════════════════════════════════════════════════════════
+    # SECTION 2 — PER-ORDER FEASIBILITY (in rank order)
+    # ══════════════════════════════════════════════════════════════════════
+    st.markdown("""
+    <h2 style="margin-bottom:4px">🏭 Feasibility by Rank</h2>
+    <p style="color:#666;margin-top:0">Inventory depleted in priority order — Rank 1 gets first pick</p>
+    """, unsafe_allow_html=True)
 
-        mat   = res["material"]
-        desc  = res["description"]
-        qty   = res["qty"]
-        sol_a = res["sol_a"]
-        sol_b = res["sol_b"]
+    for r in ranked:
+        oid      = r.get("order_id", "?")
+        cust     = r.get("customer", {})
+        is_new   = oid == order_id
+        req_date = r["req_date"]
+        days_left = (req_date - today).days
+        results  = r.get("results", [])
 
-        with st.expander(f"📦 {desc}  ({mat})  ·  {qty:,} PCS", expanded=True):
+        ok_count   = sum(1 for x in results if x.get("sol_a") and x["sol_a"]["status"] == "FULL")
+        part_count = sum(1 for x in results if x.get("sol_a") and x["sol_a"]["status"] == "PARTIAL")
+        none_count = sum(1 for x in results if not x.get("sol_a") or x["sol_a"]["status"] == "NONE")
 
-            # preferred factory warning
-            if not res.get("pref_exists", True):
-                avail = ", ".join(r["plant"] for r in res["records"])
-                st.warning(f"**{preferred}** does not produce this material. "
-                           f"Available at: **{avail}**")
+        if none_count == len(results):
+            order_color, order_icon = "#dc3545", "❌"
+        elif ok_count == len(results):
+            order_color, order_icon = "#28a745", "✅"
+        else:
+            order_color, order_icon = "#fd7e14", "⚠️"
 
-            show_a = sol_a["status"] != "NONE"
-            show_b = sol_b is not None
-            col_a_col, col_b_col = (
-                st.columns(2) if (show_a and show_b) else
-                [st.container(), None] if (show_a and not show_b) else
-                [None, st.container()]
-            )
+        new_badge = ' &nbsp;<span style="background:#6f42c1;color:white;padding:2px 8px;border-radius:4px;font-size:0.75rem">NEW</span>' if is_new else ""
+        expander_label = f"Rank #{r['rank']} · {oid} · {cust.get('name','?')} · {len(results)} material(s)"
 
-            # ── SOLUTION A — only show if stock exists ─────────────────────
-            if show_a:
-                with col_a_col:
-                    status_colors = {"FULL": "#28a745", "PARTIAL": "#fd7e14"}
-                    status_icons  = {"FULL": "✅", "PARTIAL": "⚠️"}
-                    sc = status_colors.get(sol_a["status"], "#fd7e14")
-                    si = status_icons.get(sol_a["status"], "⚠️")
+        with st.expander(expander_label, expanded=is_new):
 
-                    st.markdown(f"""
-                    <div style="background:{sc}22;border-left:4px solid {sc};
-                                padding:12px 16px;border-radius:8px;margin-bottom:12px">
-                        <b style="color:{sc};font-size:1.05rem">{si} Solution A — Meet the Deadline</b><br>
-                        <span style="color:#333;font-size:0.9rem">{sol_a['note']}</span>
+            # order header card
+            st.markdown(f"""
+            <div style="background:{order_color}18;border-left:5px solid {order_color};
+                        padding:14px 18px;border-radius:8px;margin-bottom:16px">
+                <div style="display:flex;justify-content:space-between;align-items:center">
+                    <div>
+                        <span style="font-size:1.2rem;font-weight:700;color:{order_color}">
+                            {order_icon} {oid}{new_badge}
+                        </span>
+                        &nbsp;&nbsp;
+                        <span style="color:#555;font-size:0.9rem">
+                            {cust.get('name','?')} · {cust.get('segment','?')} · {cust.get('region','?')}
+                        </span>
                     </div>
-                    """, unsafe_allow_html=True)
-
-                    if sol_a["legs"]:
-                        rows = []
-                        for leg in sol_a["legs"]:
-                            risk_color = {"LOW":"🟢","MODERATE":"🟡","CRITICAL":"🔴"}.get(leg["cap_risk"],"⚪")
-                            rows.append({
-                                "Factory":    leg["name"],
-                                "Qty (PCS)":  f"{leg['qty']:,}",
-                                "Ships by":   str(leg["delivery"]),
-                                "Capacity":   f"{risk_color} {leg['util']*100:.0f}% {leg['cap_risk']}",
-                                "Cost (EUR)": f"€{leg['line_cost']:,.0f}",
-                            })
-                        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-                        st.markdown(f"**Total: {sol_a['covered']:,} PCS · €{sol_a['total_cost']:,.0f} · by {sol_a['last_date']}**")
-
-            # ── SOLUTION B — only shown when Solution A is not FULL ──────
-            if show_b:
-                with col_b_col:
-                    best = sol_b["best"]
-                    st.markdown(f"""
-                    <div style="background:#1f77b422;border-left:4px solid #1f77b4;
-                                padding:12px 16px;border-radius:8px;margin-bottom:12px">
-                        <b style="color:#1f77b4;font-size:1.05rem">🏭 Solution B — One Factory, Full Qty</b><br>
-                        <span style="color:#333;font-size:0.9rem">Single source for all {qty:,} PCS</span>
+                    <div style="text-align:right;font-size:0.85rem;color:#555">
+                        Score: <b>{r['composite_score']:.4f}</b> &nbsp;|&nbsp;
+                        Prob: <b>{r['probability']}%</b> &nbsp;|&nbsp;
+                        Tier: <b>{r['revenue_tier']}</b><br>
+                        Deadline: <b>{req_date}</b> ({days_left}d) &nbsp;|&nbsp;
+                        Factory: <b>{r['preferred']}</b> &nbsp;|&nbsp;
+                        Priority: <b>{r['order'].get('priority','?')}</b>
                     </div>
-                    """, unsafe_allow_html=True)
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
 
-                    if best:
-                        delta   = (req_date - best["delivery"]).days
-                        on_time = delta >= 0
-                        t_color = "#28a745" if on_time else "#dc3545"
-                        t_label = f"+{delta}d buffer" if on_time else f"{abs(delta)}d late"
-                        t_icon  = "⬆" if on_time else "⬇"
+            # KPI mini-row
+            mk1, mk2, mk3, mk4 = st.columns(4)
+            mk1.metric("✅ Fully Covered", ok_count)
+            mk2.metric("⚠️ Partial",       part_count)
+            mk3.metric("❌ No Stock",      none_count)
+            mk4.metric("Days to Deadline", days_left)
 
-                        r1, r2, r3 = st.columns(3)
-                        r1.markdown(f"""
-                        <div style="background:#f8f9fa;padding:10px 12px;border-radius:8px;text-align:center">
-                            <div style="font-size:0.75rem;color:#666;margin-bottom:4px">Best Factory</div>
-                            <div style="font-size:1rem;font-weight:700">{best['name'].split('(')[0].strip()}</div>
-                        </div>""", unsafe_allow_html=True)
+            st.markdown("---")
 
-                        r2.markdown(f"""
-                        <div style="background:#f8f9fa;padding:10px 12px;border-radius:8px;text-align:center">
-                            <div style="font-size:0.75rem;color:#666;margin-bottom:4px">Delivery Date</div>
-                            <div style="font-size:1rem;font-weight:700">{best['delivery']}</div>
-                            <div style="font-size:0.8rem;color:{t_color}">{t_icon} {t_label}</div>
-                        </div>""", unsafe_allow_html=True)
+            # per-material results
+            for res in results:
+                if res.get("error"):
+                    st.error(f"**{res['material']}** — {res['error']}")
+                    continue
 
-                        r3.markdown(f"""
-                        <div style="background:#f8f9fa;padding:10px 12px;border-radius:8px;text-align:center">
-                            <div style="font-size:0.75rem;color:#666;margin-bottom:4px">Total Cost</div>
-                            <div style="font-size:1rem;font-weight:700">€{best['total_cost']:,.0f}</div>
-                            <div style="font-size:0.8rem;color:#666">€{best['cost_unit']:.2f}/pc</div>
-                        </div>""", unsafe_allow_html=True)
+                mat   = res["material"]
+                desc  = res["description"]
+                qty   = res["qty"]
+                sol_a = res["sol_a"]
+                sol_b = res["sol_b"]
 
-                        st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
-                        c1, c2 = st.columns(2)
-                        c1.markdown(f"""
-                        <div style="background:#e8f5e9;padding:10px 12px;border-radius:8px;text-align:center">
-                            <div style="font-size:0.75rem;color:#666;margin-bottom:4px">From Stock</div>
-                            <div style="font-size:1rem;font-weight:700;color:#28a745">{best['from_stock']:,} PCS</div>
-                        </div>""", unsafe_allow_html=True)
-                        c2.markdown(f"""
-                        <div style="background:#fff3e0;padding:10px 12px;border-radius:8px;text-align:center">
-                            <div style="font-size:0.75rem;color:#666;margin-bottom:4px">From Production</div>
-                            <div style="font-size:1rem;font-weight:700;color:#fd7e14">{best['from_prod']:,} PCS</div>
-                        </div>""", unsafe_allow_html=True)
+                with st.container():
+                    show_a = sol_a and sol_a["status"] != "NONE"
+                    show_b = sol_b is not None
 
-                        if sol_b["all"]:
-                            chart_data = pd.DataFrame([{
-                                "Factory": o["name"].split("(")[0].strip(),
-                                "Delivery": str(o["delivery"]),
-                                "Days to Deliver": (o["delivery"] - today).days,
-                                "On Time": "✅ On Time" if o["delivery"] <= req_date else "❌ Late",
-                                "Cost EUR": o["total_cost"],
-                            } for o in sol_b["all"]])
+                    col_a_col, col_b_col = (
+                        st.columns(2) if (show_a and show_b) else
+                        [st.container(), None] if (show_a and not show_b) else
+                        [None, st.container()]
+                    )
 
-                            fig = px.bar(
-                                chart_data, x="Factory", y="Days to Deliver",
-                                color="On Time",
-                                color_discrete_map={"✅ On Time": "#28a745", "❌ Late": "#dc3545"},
-                                text="Delivery",
-                                labels={"Days to Deliver": "Days until delivery"},
-                                height=280,
-                            )
-                            fig.update_traces(textposition="outside")
-                            fig.add_hline(y=days_left, line_dash="dash",
-                                          line_color="orange",
-                                          annotation_text="Deadline",
-                                          annotation_position="right")
-                            fig.update_layout(margin=dict(t=10, b=10), showlegend=True,
-                                              legend=dict(orientation="h", y=-0.3))
-                            st.plotly_chart(fig, use_container_width=True)
+                    if show_a:
+                        with col_a_col:
+                            sc = {"FULL": "#28a745", "PARTIAL": "#fd7e14"}.get(sol_a["status"], "#fd7e14")
+                            si = {"FULL": "✅", "PARTIAL": "⚠️"}.get(sol_a["status"], "⚠️")
+                            st.markdown(f"""
+                            <div style="background:{sc}18;border-left:4px solid {sc};
+                                        padding:10px 14px;border-radius:8px;margin-bottom:10px">
+                                <b style="color:{sc}">{si} {desc}</b>
+                                <span style="color:#888;font-size:0.8rem"> · {mat} · {qty:,} PCS</span><br>
+                                <span style="color:#444;font-size:0.85rem">{sol_a['note']}</span>
+                            </div>""", unsafe_allow_html=True)
+
+                            if sol_a["legs"]:
+                                leg_rows = []
+                                for leg in sol_a["legs"]:
+                                    rc = {"LOW":"🟢","MODERATE":"🟡","CRITICAL":"🔴"}.get(leg["cap_risk"],"⚪")
+                                    leg_rows.append({
+                                        "Factory":    leg["name"],
+                                        "Qty (PCS)":  f"{leg['qty']:,}",
+                                        "Ships by":   str(leg["delivery"]),
+                                        "Capacity":   f"{rc} {leg['util']*100:.0f}%",
+                                        "Cost (EUR)": f"€{leg['line_cost']:,.0f}",
+                                    })
+                                st.dataframe(pd.DataFrame(leg_rows), use_container_width=True, hide_index=True)
+                                st.caption(f"Total: {sol_a['covered']:,} PCS · €{sol_a['total_cost']:,.0f} · by {sol_a['last_date']}")
+
+                    if show_b:
+                        with col_b_col:
+                            best = sol_b["best"]
+                            st.markdown(f"""
+                            <div style="background:#1f77b418;border-left:4px solid #1f77b4;
+                                        padding:10px 14px;border-radius:8px;margin-bottom:10px">
+                                <b style="color:#1f77b4">🏭 Solution B — {desc}</b>
+                                <span style="color:#888;font-size:0.8rem"> · {mat} · {qty:,} PCS</span><br>
+                                <span style="color:#444;font-size:0.85rem">Single factory, full quantity</span>
+                            </div>""", unsafe_allow_html=True)
+
+                            if best:
+                                delta   = (req_date - best["delivery"]).days
+                                on_time = delta >= 0
+                                tc = "#28a745" if on_time else "#dc3545"
+                                tl = f"+{delta}d buffer" if on_time else f"{abs(delta)}d late"
+
+                                b1, b2, b3 = st.columns(3)
+                                b1.markdown(f"""<div style="background:#f8f9fa;padding:8px 10px;border-radius:6px;text-align:center">
+                                    <div style="font-size:0.7rem;color:#666">Best Factory</div>
+                                    <div style="font-size:0.9rem;font-weight:700">{best['name'].split('(')[0].strip()}</div>
+                                </div>""", unsafe_allow_html=True)
+                                b2.markdown(f"""<div style="background:#f8f9fa;padding:8px 10px;border-radius:6px;text-align:center">
+                                    <div style="font-size:0.7rem;color:#666">Delivery</div>
+                                    <div style="font-size:0.9rem;font-weight:700">{best['delivery']}</div>
+                                    <div style="font-size:0.75rem;color:{tc}">{tl}</div>
+                                </div>""", unsafe_allow_html=True)
+                                b3.markdown(f"""<div style="background:#f8f9fa;padding:8px 10px;border-radius:6px;text-align:center">
+                                    <div style="font-size:0.7rem;color:#666">Total Cost</div>
+                                    <div style="font-size:0.9rem;font-weight:700">€{best['total_cost']:,.0f}</div>
+                                    <div style="font-size:0.75rem;color:#666">€{best['cost_unit']:.2f}/pc</div>
+                                </div>""", unsafe_allow_html=True)
+
+                    st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
 
     st.divider()
-    st.success(f"Analysis complete — {len(results)} material(s) checked across all 15 Northwind factories.")
+    total_mats = sum(len(r.get("results", [])) for r in ranked)
+    st.success(f"Pipeline complete — {len(ranked)} orders ranked · {total_mats} materials checked · inventory allocated in priority order")
