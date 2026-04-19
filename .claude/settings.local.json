@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(C:/Users/sahal/.local/bin/claude.exe -p \"Read temp_selection.json and tell me the customer name and materials\" --dangerously-skip-permissions)",
+      "Bash(C:/Users/sahal/.local/bin/claude.exe -p \"Analyze the customer request in temp_selection.json. Follow the instructions in CLAUDE.md exactly.\" --dangerously-skip-permissions)",
+      "Bash(C:/Users/sahal/.local/bin/claude.exe -p \"Analyze the customer request in temp_selection.json. Follow the instructions in CLAUDE.md exactly.\" --dangerously-skip-permissions --disallowed-tools \"Agent\")",
+      "Bash(python scripts/run_analysis.py)",
+      "Bash(python dashboard/pages/run.py)",
+      "Bash(python -c ' *)",
+      "Bash(python -m py_compile dashboard/pages/run_data_pipeline.py)",
+      "Bash(python -m py_compile dashboard/pages/3_Order_Feasibility.py)"
+    ]
+  }
+}

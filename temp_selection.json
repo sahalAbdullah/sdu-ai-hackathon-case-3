@@ -1,0 +1,27 @@
+{
+  "customer": {
+    "name": "Danfoss",
+    "segment": "Food & Beverage",
+    "region": "EMEA-East"
+  },
+  "order": {
+    "requested_delivery_date": "2026-07-18",
+    "preferred_factory": "NW03 \u2013 Northwind Carpathia",
+    "priority": "Standard",
+    "notes": "None"
+  },
+  "materials_requested": [
+    {
+      "material_number": "MAT-101414",
+      "description": "MX250/PL.15 304TL 0.6mm",
+      "type": "Plate",
+      "quantity_pcs": 5000
+    }
+  ],
+  "summary": {
+    "total_materials": 1,
+    "total_pcs": 5000,
+    "plates_count": 1,
+    "gaskets_count": 0
+  }
+}
