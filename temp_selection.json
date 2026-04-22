@@ -1,24 +1,24 @@
 {
   "order_id": "ORD-004",
   "customer": {
-    "name": "T. Novak",
-    "segment": "District Heating",
-    "region": "EMEA-East",
+    "name": "Danfoss",
+    "segment": "Food & Beverage",
+    "region": "EMEA-West",
     "probability": 50,
     "revenue_tier": "Medium"
   },
   "order": {
     "requested_delivery_date": "2026-07-18",
-    "preferred_factory": "NW03 \u2013 Northwind Carpathia",
-    "priority": "Standard",
+    "preferred_factory": "NW05 \u2013 Northwind Pacific",
+    "priority": "Urgent",
     "notes": "None"
   },
   "materials_requested": [
     {
-      "material_number": "MAT-101414",
-      "description": "MX250/PL.15 304TL 0.6mm",
+      "material_number": "MAT-100656",
+      "description": "MX100/PL.07 304TL 0.4mm",
       "type": "Plate",
-      "quantity_pcs": 500
+      "quantity_pcs": 600
     }
   ]
 }

@@ -256,7 +256,7 @@ if submit_btn and has_selection:
     # ══════════════════════════════════════════════════════════════════════
     st.markdown("""
     <h2 style="margin-bottom:4px">📊 Pipeline Priority Ranking</h2>
-    <p style="color:#666;margin-top:0">Orders ranked by composite score — Rank 1 gets inventory first</p>
+    <p style="color:#9aa0ac;margin-top:0">Orders ranked by composite score — Rank 1 gets inventory first</p>
     """, unsafe_allow_html=True)
 
     tier_colors = {"Strategic": "#7b2ff7", "Large": "#1f77b4", "Medium": "#fd7e14", "Small": "#6c757d"}
@@ -288,19 +288,24 @@ if submit_btn and has_selection:
     _rows_html = ""
     for _row in ranking_rows:
         _is_new = order_id in _row["Order ID"]
-        _bg  = "background:#fff3cd;border-left:4px solid #ffc107;" if _is_new else ""
-        _fw  = "font-weight:600;" if _is_new else ""
-        _cells = "".join(f'<td style="padding:8px 12px;{_fw}white-space:nowrap">{_row[c]}</td>' for c in _cols)
+        _bg  = "background:#2a2000;border-left:4px solid #ffc107;" if _is_new else "background:#1a1d24;"
+        _fw  = "font-weight:700;color:#ffc107;" if _is_new else "color:#e8eaed;"
+        _cells = "".join(f'<td style="padding:9px 14px;{_fw}white-space:nowrap;border-bottom:1px solid #2d3139">{_row[c]}</td>' for c in _cols)
         _rows_html += f'<tr style="{_bg}">{_cells}</tr>'
+    _hdr_styled = "".join(
+        f'<th style="padding:10px 14px;text-align:left;border-bottom:2px solid #3a3f4b;'
+        f'color:#9aa0ac;font-weight:600;font-size:0.8rem;white-space:nowrap;letter-spacing:0.04em">{c}</th>'
+        for c in _cols
+    )
     st.markdown(f"""
-    <div style="overflow-x:auto;border:1px solid #dee2e6;border-radius:8px">
+    <div style="overflow-x:auto;border:1px solid #2d3139;border-radius:10px;background:#141720">
     <table style="width:100%;border-collapse:collapse;font-size:0.88rem">
-      <thead><tr style="background:#f8f9fa">{_hdr}</tr></thead>
+      <thead><tr style="background:#1e2230">{_hdr_styled}</tr></thead>
       <tbody>{_rows_html}</tbody>
     </table>
     </div>
-    <p style="font-size:0.78rem;color:#888;margin:4px 0 0">
-      🟡 Highlighted row = your order
+    <p style="font-size:0.78rem;color:#9aa0ac;margin:6px 0 0">
+      🟡 Highlighted = your order
     </p>
     """, unsafe_allow_html=True)
 
@@ -432,8 +437,8 @@ if submit_btn and has_selection:
     # SECTION 2 — PER-ORDER FEASIBILITY (in rank order)
     # ══════════════════════════════════════════════════════════════════════
     st.markdown("""
-    <h2 style="margin-bottom:4px">🏭 Feasibility by Rank</h2>
-    <p style="color:#666;margin-top:0">Inventory depleted in priority order — Rank 1 gets first pick</p>
+    <h2 style="margin-bottom:4px;color:#e8eaed">🏭 Feasibility by Rank</h2>
+    <p style="color:#9aa0ac;margin-top:0">Inventory depleted in priority order — Rank 1 gets first pick</p>
     """, unsafe_allow_html=True)
 
     for r in ranked:
@@ -462,7 +467,7 @@ if submit_btn and has_selection:
 
             # order header card
             st.markdown(f"""
-            <div style="background:{order_color}18;border-left:5px solid {order_color};
+            <div style="background:#1e2230;border-left:5px solid {order_color};
                         padding:14px 18px;border-radius:8px;margin-bottom:16px">
                 <div style="display:flex;justify-content:space-between;align-items:center">
                     <div>
@@ -470,17 +475,17 @@ if submit_btn and has_selection:
                             {order_icon} {oid}{new_badge}
                         </span>
                         &nbsp;&nbsp;
-                        <span style="color:#555;font-size:0.9rem">
+                        <span style="color:#b0b8c8;font-size:0.9rem">
                             {cust.get('name','?')} · {cust.get('segment','?')} · {cust.get('region','?')}
                         </span>
                     </div>
-                    <div style="text-align:right;font-size:0.85rem;color:#555">
-                        Score: <b>{r['composite_score']:.4f}</b> &nbsp;|&nbsp;
-                        Prob: <b>{r['probability']}%</b> &nbsp;|&nbsp;
-                        Tier: <b>{r['revenue_tier']}</b><br>
-                        Deadline: <b>{req_date}</b> ({days_left}d) &nbsp;|&nbsp;
-                        Factory: <b>{r['preferred']}</b> &nbsp;|&nbsp;
-                        Priority: <b>{r['order'].get('priority','?')}</b>
+                    <div style="text-align:right;font-size:0.85rem;color:#9aa0ac">
+                        Score: <b style="color:#e8eaed">{r['composite_score']:.4f}</b> &nbsp;|&nbsp;
+                        Prob: <b style="color:#e8eaed">{r['probability']}%</b> &nbsp;|&nbsp;
+                        Tier: <b style="color:#e8eaed">{r['revenue_tier']}</b><br>
+                        Deadline: <b style="color:#e8eaed">{req_date}</b> ({days_left}d) &nbsp;|&nbsp;
+                        Factory: <b style="color:#e8eaed">{r['preferred']}</b> &nbsp;|&nbsp;
+                        Priority: <b style="color:#e8eaed">{r['order'].get('priority','?')}</b>
                     </div>
                 </div>
             </div>
@@ -522,11 +527,11 @@ if submit_btn and has_selection:
                             sc = {"FULL": "#28a745", "PARTIAL": "#fd7e14"}.get(sol_a["status"], "#fd7e14")
                             si = {"FULL": "✅", "PARTIAL": "⚠️"}.get(sol_a["status"], "⚠️")
                             st.markdown(f"""
-                            <div style="background:{sc}18;border-left:4px solid {sc};
+                            <div style="background:#1e2230;border-left:4px solid {sc};
                                         padding:10px 14px;border-radius:8px;margin-bottom:10px">
                                 <b style="color:{sc}">{si} {desc}</b>
-                                <span style="color:#888;font-size:0.8rem"> · {mat} · {qty:,} PCS</span><br>
-                                <span style="color:#444;font-size:0.85rem">{sol_a['note']}</span>
+                                <span style="color:#9aa0ac;font-size:0.8rem"> · {mat} · {qty:,} PCS</span><br>
+                                <span style="color:#b0b8c8;font-size:0.85rem">{sol_a['note']}</span>
                             </div>""", unsafe_allow_html=True)
 
                             if sol_a["legs"]:
@@ -547,11 +552,11 @@ if submit_btn and has_selection:
                         with col_b_col:
                             best = sol_b["best"]
                             st.markdown(f"""
-                            <div style="background:#1f77b418;border-left:4px solid #1f77b4;
+                            <div style="background:#1e2230;border-left:4px solid #1f77b4;
                                         padding:10px 14px;border-radius:8px;margin-bottom:10px">
                                 <b style="color:#1f77b4">🏭 Solution B — {desc}</b>
-                                <span style="color:#888;font-size:0.8rem"> · {mat} · {qty:,} PCS</span><br>
-                                <span style="color:#444;font-size:0.85rem">Single factory, full quantity</span>
+                                <span style="color:#9aa0ac;font-size:0.8rem"> · {mat} · {qty:,} PCS</span><br>
+                                <span style="color:#b0b8c8;font-size:0.85rem">Single factory, full quantity</span>
                             </div>""", unsafe_allow_html=True)
 
                             if best:
@@ -561,19 +566,19 @@ if submit_btn and has_selection:
                                 tl = f"+{delta}d buffer" if on_time else f"{abs(delta)}d late"
 
                                 b1, b2, b3 = st.columns(3)
-                                b1.markdown(f"""<div style="background:#f8f9fa;padding:8px 10px;border-radius:6px;text-align:center">
-                                    <div style="font-size:0.7rem;color:#666">Best Factory</div>
-                                    <div style="font-size:0.9rem;font-weight:700">{best['name'].split('(')[0].strip()}</div>
+                                b1.markdown(f"""<div style="background:#252a36;padding:8px 10px;border-radius:6px;text-align:center">
+                                    <div style="font-size:0.7rem;color:#9aa0ac">Best Factory</div>
+                                    <div style="font-size:0.9rem;font-weight:700;color:#e8eaed">{best['name'].split('(')[0].strip()}</div>
                                 </div>""", unsafe_allow_html=True)
-                                b2.markdown(f"""<div style="background:#f8f9fa;padding:8px 10px;border-radius:6px;text-align:center">
-                                    <div style="font-size:0.7rem;color:#666">Delivery</div>
-                                    <div style="font-size:0.9rem;font-weight:700">{best['delivery']}</div>
+                                b2.markdown(f"""<div style="background:#252a36;padding:8px 10px;border-radius:6px;text-align:center">
+                                    <div style="font-size:0.7rem;color:#9aa0ac">Delivery</div>
+                                    <div style="font-size:0.9rem;font-weight:700;color:#e8eaed">{best['delivery']}</div>
                                     <div style="font-size:0.75rem;color:{tc}">{tl}</div>
                                 </div>""", unsafe_allow_html=True)
-                                b3.markdown(f"""<div style="background:#f8f9fa;padding:8px 10px;border-radius:6px;text-align:center">
-                                    <div style="font-size:0.7rem;color:#666">Total Cost</div>
-                                    <div style="font-size:0.9rem;font-weight:700">€{best['total_cost']:,.0f}</div>
-                                    <div style="font-size:0.75rem;color:#666">€{best['cost_unit']:.2f}/pc</div>
+                                b3.markdown(f"""<div style="background:#252a36;padding:8px 10px;border-radius:6px;text-align:center">
+                                    <div style="font-size:0.7rem;color:#9aa0ac">Total Cost</div>
+                                    <div style="font-size:0.9rem;font-weight:700;color:#e8eaed">€{best['total_cost']:,.0f}</div>
+                                    <div style="font-size:0.75rem;color:#9aa0ac">€{best['cost_unit']:.2f}/pc</div>
                                 </div>""", unsafe_allow_html=True)
 
                     st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
