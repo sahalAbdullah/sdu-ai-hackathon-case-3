@@ -8,7 +8,7 @@ Phase 3:            Master Agent synthesises all five reports into a final brief
 Run:  python scripts/run_analysis.py
 """
 
-import json, subprocess, sys, concurrent.futures, tempfile, os
+import json, subprocess, sys, concurrent.futures, tempfile, os, shutil
 from pathlib import Path
 import pandas as pd
 
@@ -18,7 +18,13 @@ ROOT   = Path(__file__).parent.parent
 DATA   = ROOT / "data" / "extracted"
 AGENTS = ROOT / "agents"
 SEL    = ROOT / "temp_selection.json"
-CLAUDE = r"C:\Users\sahal\.local\bin\claude.exe"
+# Path to the Claude Code CLI. Set CLAUDE_BIN to override, otherwise it is found on PATH.
+CLAUDE = os.environ.get("CLAUDE_BIN") or shutil.which("claude") or "claude"
+
+# Every agent receives its data pre-filtered inside the prompt, so the agents
+# need no file or shell access. They run in plain --print mode with no
+# permission bypass, which keeps them read-only by design.
+CLAUDE_ARGS = [CLAUDE, "--print"]
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -42,7 +48,7 @@ def call_claude(prompt: str, label: str) -> str:
     try:
         with open(tmp, "r", encoding="utf-8", errors="replace") as stdin_f:
             proc = subprocess.run(
-                [CLAUDE, "--print", "--dangerously-skip-permissions"],
+                CLAUDE_ARGS,
                 stdin=stdin_f,
                 capture_output=True,
                 text=True,
@@ -62,7 +68,7 @@ def call_claude_stream(prompt: str) -> None:
     try:
         with open(tmp, "r", encoding="utf-8", errors="replace") as stdin_f:
             proc = subprocess.Popen(
-                [CLAUDE, "--print", "--dangerously-skip-permissions"],
+                CLAUDE_ARGS,
                 stdin=stdin_f,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
