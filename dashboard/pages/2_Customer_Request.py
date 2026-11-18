@@ -284,8 +284,6 @@ with btn_col1:
 with btn_col2:
     st.button("Clear All Fields", on_click=clear_all, type="secondary")
 
-CLAUDE_BIN  = r"C:\Users\sahal\.local\bin\claude.exe"
-BASH_BIN    = r"C:\Program Files\Git\bin\bash.exe"
 
 # ── guard: only run once per button press using session state ─────────────
 if submit_btn and has_selection and "last_run_id" not in st.session_state:
@@ -346,13 +344,13 @@ if "last_run_id" in st.session_state and submit_btn and has_selection:
     c4.metric("Gaskets",     request['summary']['gaskets_count'])
     st.divider()
 
-    # ── run feasibility algorithm (run.py) ───────────────────────────────
+    # ── run feasibility algorithm (run_data_pipeline.py) ───────────────────────────────
     st.subheader("Feasibility Check")
     st.caption("Algorithm scanning inventory, capacity, and lead times across all factories")
 
     with st.spinner("Running feasibility check..."):
         run_proc = subprocess.run(
-            [sys.executable, str(ROOT / "dashboard" / "pages" / "run.py")],
+            [sys.executable, str(ROOT / "dashboard" / "pages" / "run_data_pipeline.py")],
             capture_output=True, text=True, encoding="utf-8",
             errors="replace", cwd=str(ROOT)
         )
